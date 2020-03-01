@@ -1,8 +1,9 @@
-from typing import Dict, List, Set, Union
+from typing import Dict, List, Optional, Set, Union
 from typing_extensions import Protocol
 
 from collections import OrderedDict
 from enum import Enum
+from types import DynamicClassAttribute
 
 import glfw
 import OpenGL.GL as gl
@@ -33,23 +34,39 @@ class EntryType(Enum):
             return EntryType.String
         else:
             return EntryType.Unknown
+    
+    def is_entry(self):
+        return self.value < 10
 
 
 class Widget:
     tipe: EntryType
-
-    entry: NetworkTableEntry
-    table: NetworkTable
+    key: str
 
     show_indicator: bool = True
 
     def __init__(self, entry: Union[NetworkTable, NetworkTableEntry], tipe: EntryType = EntryType.Unknown):
         if isinstance(entry, NetworkTable):
             self.tipe = tipe
-            self.table = entry
+            self.key = entry.getPath()
         else:
             self.tipe = EntryType.from_nt_type(entry.getType())
-            self.entry = entry
+            self.key = entry.getName()
+    
+    @DynamicClassAttribute
+    def entry(self) -> Optional[NetworkTableEntry]:
+        entries: List[NetworkTableEntry] = NetworkTables.getEntries(self.key, 0)
+        if len(entries) == 0:
+            return None
+        else:
+            return entries.pop()
+    
+    @DynamicClassAttribute
+    def table(self) -> Optional[NetworkTable]:
+        table = NetworkTables.getTable(self.key)
+        if len(table.getKeys()) == 0:
+            return None
+        return table
 
 
 show_sendable_debug = True
@@ -57,8 +74,13 @@ active_widgets: Dict[str, Widget] = {}
 
 
 def init():
-    # NetworkTables.initialize(server='roborio-2175-frc.local')
     NetworkTables.initialize(server='localhost')
+    # NetworkTables.initialize(server='roborio-2175-frc.local')
+    
+    def listen(connected, _):
+        if not connected:
+            NetworkTables.deleteAllEntries()
+    NetworkTables.addConnectionListener(listen, False)
 
 
 def draw(imgui) -> None:
@@ -116,7 +138,17 @@ def draw(imgui) -> None:
         if not opened:
             to_close.append(key)
 
+        if (
+            (widget.tipe.is_entry() and widget.entry is None)
+            or (not widget.tipe.is_entry() and widget.table is None)
+        ):
+            imgui.text_colored('WARNING! Disconnected!', 1, 0, 0)
+            imgui.end()
+            continue
+
         if widget.tipe == EntryType.Boolean:
+            assert widget.entry is not None
+
             if widget.show_indicator:
                 imgui.push_item_width(-1)
                 r, g, b = (0, 1, 0) if widget.entry.value else (1, 0, 0)
@@ -126,6 +158,8 @@ def draw(imgui) -> None:
             if clicked:
                 widget.entry.setValue(new_val)
         elif widget.tipe == EntryType.Double:
+            assert widget.entry is not None
+
             val = str(widget.entry.value)
             changed, new_val = imgui.input_text('', val, 64, imgui.INPUT_TEXT_CHARS_DECIMAL)
             if changed:
@@ -134,10 +168,14 @@ def draw(imgui) -> None:
                 except ValueError:
                     pass
         elif widget.tipe == EntryType.String:
+            assert widget.entry is not None
+
             changed, new_val = imgui.input_text('', widget.entry.value, 256)
             if changed:
                 widget.entry.setString(new_val)
         elif widget.tipe == EntryType.Chooser:
+            assert widget.table is not None
+
             values = widget.table.getStringArray('options', [])
             try:
                 selected = values.index(widget.table.getString('active', ''))
@@ -149,6 +187,7 @@ def draw(imgui) -> None:
                 widget.table.putString('active', values[current])
         else:
             try:
+                assert widget.entry is not None
                 imgui.text(str(widget.entry.value))
             except AttributeError:
                 imgui.text('Could not view contents.')
