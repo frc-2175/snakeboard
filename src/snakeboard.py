@@ -152,7 +152,6 @@ def draw(imgui) -> None:
 
     to_close: List[str] = []
     for key, widget in active_widgets.items():
-        print(widget.__dict__)
         expanded, opened = imgui.begin(entry_name(key), True)
         if not opened:
             to_close.append(key)
