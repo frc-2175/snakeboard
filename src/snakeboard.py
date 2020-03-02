@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Set, Union
+from typing import Any, cast, Dict, List, Optional, Set, Union
 from typing_extensions import Protocol
 
 from collections import OrderedDict
@@ -25,7 +25,7 @@ class EntryType(Enum):
     Chooser = 10
 
     @staticmethod
-    def from_nt_type(tipe) -> 'EntryType':
+    def from_nt_type(tipe: NetworkTableType) -> 'EntryType':
         if tipe == NetworkTableType.kBoolean:
             return EntryType.Boolean
         elif tipe == NetworkTableType.kDouble:
@@ -55,7 +55,7 @@ class Widget:
     
     @DynamicClassAttribute
     def entry(self) -> Optional[NetworkTableEntry]:
-        entries: List[NetworkTableEntry] = NetworkTables.getEntries(self.key, 0)
+        entries = NetworkTables.getEntries(self.key, 0)
         if len(entries) == 0:
             return None
         else:
@@ -67,15 +67,23 @@ class Widget:
         if len(table.getKeys()) == 0:
             return None
         return table
+    
+    # @staticmethod
+    # def fromdict(d: Dict[str, Any]) -> Widget:
+    #     w = Widget()
+
+    #     for k, v in d.items():
+    #         w[k] = v
 
 
 show_sendable_debug = True
+show_demo = False
 active_widgets: Dict[str, Widget] = {}
 
 
 def init():
-    NetworkTables.initialize(server='localhost')
-    # NetworkTables.initialize(server='roborio-2175-frc.local')
+    NetworkTables.startClient('localhost')
+    # NetworkTables.startClientTeam(2175)
     
     def listen(connected, _):
         if not connected:
@@ -85,9 +93,19 @@ def init():
 
 def draw(imgui) -> None:
     global show_sendable_debug
+    global show_demo
     global active_widgets
 
-    imgui.show_test_window()
+    if imgui.begin_main_menu_bar():
+        if imgui.begin_menu("Help"):
+            clicked, _ = imgui.menu_item("Hide Demo" if show_demo else "Show Demo")
+            if clicked:
+                show_demo = not show_demo
+            imgui.end_menu()
+        imgui.end_main_menu_bar()
+
+    if show_demo:
+        imgui.show_test_window()
 
     if imgui.begin('All Entries'):
         if imgui.begin_popup_context_window():
@@ -96,9 +114,17 @@ def draw(imgui) -> None:
                 show_sendable_debug = do_debug
             imgui.end_popup()
 
-        def table_tree(table):
+        def table_tree(table: EntryGroup):
             for key, entry in table.items():
-                if isinstance(entry, OrderedDict):
+                if isinstance(entry, NetworkTableEntry):
+                    imgui.text(entry_name(key) + ': ' + str(entry.value))
+                    
+                    imgui.same_line()
+                    imgui.push_id(key)
+                    if imgui.button('Add'):
+                        active_widgets[key] = Widget(entry)
+                    imgui.pop_id()
+                else:
                     t = NetworkTables.getTable(key)
                     if '.type' in t.getKeys():
                         name = t.getString('.name', '')
@@ -119,14 +145,6 @@ def draw(imgui) -> None:
                         # nothing fancy, just a subtable
                         table_tree(entry)
                         imgui.tree_pop()
-                else:
-                    imgui.text(entry_name(key) + ': ' + str(entry.value))
-                    
-                    imgui.same_line()
-                    imgui.push_id(key)
-                    if imgui.button('Add'):
-                        active_widgets[key] = Widget(entry)
-                    imgui.pop_id()
 
         entries = buildList(sorted(NetworkTables.getEntries('', 0), key=lambda e: e.getName()))
         table_tree(entries)
@@ -134,6 +152,7 @@ def draw(imgui) -> None:
 
     to_close: List[str] = []
     for key, widget in active_widgets.items():
+        print(widget.__dict__)
         expanded, opened = imgui.begin(entry_name(key), True)
         if not opened:
             to_close.append(key)
@@ -160,7 +179,7 @@ def draw(imgui) -> None:
         elif widget.tipe == EntryType.Double:
             assert widget.entry is not None
 
-            val = str(widget.entry.value)
+            val = str(widget.entry.getDouble(0))
             changed, new_val = imgui.input_text('', val, 64, imgui.INPUT_TEXT_CHARS_DECIMAL)
             if changed:
                 try:
@@ -170,7 +189,7 @@ def draw(imgui) -> None:
         elif widget.tipe == EntryType.String:
             assert widget.entry is not None
 
-            changed, new_val = imgui.input_text('', widget.entry.value, 256)
+            changed, new_val = imgui.input_text('', widget.entry.getString(''), 256)
             if changed:
                 widget.entry.setString(new_val)
         elif widget.tipe == EntryType.Chooser:
@@ -193,7 +212,7 @@ def draw(imgui) -> None:
                 imgui.text('Could not view contents.')
         
         if imgui.begin_popup_context_window():
-            if widget.tipe == NetworkTables.EntryTypes.BOOLEAN:
+            if widget.tipe == EntryType.Boolean:
                 clicked, new_val = imgui.checkbox('Show Indicator', widget.show_indicator)
                 if clicked:
                     widget.show_indicator = new_val
@@ -207,8 +226,10 @@ def draw(imgui) -> None:
         active_widgets.pop(key)
 
 
-def buildList(entries):
-    nested = OrderedDict()
+EntryGroup = Dict[str, Union[NetworkTableEntry, Dict[str, Any]]]
+
+def buildList(entries: List[NetworkTableEntry]):
+    nested: EntryGroup = OrderedDict()
     for entry in entries:
         segments = entry.getName().split('/')
 
@@ -225,7 +246,7 @@ def buildList(entries):
                 # table
                 if not currentKey in currentDict:
                     currentDict[currentKey] = OrderedDict()
-                currentDict = currentDict[currentKey]
+                currentDict = cast(EntryGroup, currentDict[currentKey])
             else:
                 # value
                 currentDict[currentKey] = entry
